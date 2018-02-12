@@ -1,0 +1,68 @@
+From 0edd8b2c5d122c8b8c1b6a44b16bd05ce36f1616 Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Thu, 8 Feb 2018 20:13:40 -0800
+Subject: [PATCH 2/6] sysroot: fix short release -r option handling in case of
+ sysroot pass proper kernel modules
+
+In case of -r option getting short release (opposite to full path of
+kernel build tree) stap passes short release name to
+dwfl_linux_kernel_report_offline function and this function tries to
+look up symbols in the host file system ignoring sysroot setting.
+
+Fix: in case of non empty, non "/" sysroot construct full path to
+kernel modules directory and store it into elfutils_kernel_path variable.
+
+Here are steps how to reproduce the issue. Note <sysroot> is produced by
+yocto poky build.
+
+[kamensky@coreos-lnx2 tests]$ cat meminfo.stp
+probe kernel.function("meminfo_proc_show") {
+        println("meminfo_proc_show called")
+}
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -p4 -v -m meminfo meminfo.stp
+Pass 1: parsed user script and 480 library scripts using 230196virt/93452res/5364shr/88624data kb, in 340usr/30sys/375real ms.
+semantic error: while resolving probe point: identifier 'kernel' at meminfo.stp:1:7
+        source: probe kernel.function("meminfo_proc_show") {
+                      ^
+
+Running command under strace shows that stap is trying to open linux symbol file
+on host file system, instead of looking at sysroot location:
+
+19517 openat(AT_FDCWD, "/boot/vmlinux-4.9.78-yocto-standard.debug", O_RDONLY) = -1 ENOENT (No such file or directory)
+19517 openat(AT_FDCWD, "/boot/vmlinux-4.9.78-yocto-standard", O_RDONLY) = -1 ENOENT (No such file or directory)
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ setupdwfl.cxx | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/setupdwfl.cxx b/setupdwfl.cxx
+index 11e0bb2..f00cf75 100644
+--- a/setupdwfl.cxx
++++ b/setupdwfl.cxx
+@@ -359,9 +359,19 @@ setup_dwfl_kernel (unsigned *modules_found, systemtap_session &s)
+   // passs the plain kernel_release here.  So instead we have to
+   // hard-code this magic here.
+    string lib_path = "/lib/modules/" + s.kernel_release + "/build";
+-   if (s.kernel_build_tree == string(s.sysroot + lib_path) ||
+-       (s.kernel_build_tree == lib_path
+-	&& s.sysroot == "/"))
++   if (s.kernel_build_tree == string(s.sysroot + lib_path))
++     {
++       // If we have sysroot set does not make sense to pass
++       // short release to dwfl, it won't take a sysroot into
++       // account. Let's construct full path in such case.
++       if (s.sysroot != "" && s.sysroot != "/")
++	 elfutils_kernel_path = string(s.sysroot + "/lib/modules/" + s.kernel_release);
++       else
++	 elfutils_kernel_path = s.kernel_release;
++     }
++   else
++     if (s.kernel_build_tree == lib_path
++	 && s.sysroot == "/")
+       elfutils_kernel_path = s.kernel_release;
+    else
+       elfutils_kernel_path = s.kernel_build_tree;
+-- 
+2.7.4
+

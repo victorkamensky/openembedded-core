@@ -12,6 +12,12 @@ SRC_URI = "git://sourceware.org/git/systemtap.git \
            file://0001-Install-python-modules-to-correct-library-dir.patch \
            file://0001-buildrun-remove-quotes-around-I-include-line.patch \
            file://0001-staprun-stapbpf-don-t-support-installing-a-non-root.patch \
+           file://0001-sysroot-fix-short-release-r-option-handling-in-case-.patch \
+           file://0002-sysroot-fix-short-release-r-option-handling-in-case-.patch \
+           file://0003-sysroot-debuginfo-lookup-with-sysroot-case-do-not-re.patch \
+           file://0004-sysroot-delay-adding-sysroot-path-to-module-name-in-.patch \
+           file://0005-sysroot-handle-symbolic-links-with-absolute-name-rel.patch \
+           file://0006-sysroot-_stp_umodule_relocate-needs-receive-target-f.patch \
            "
 
 COMPATIBLE_HOST = '(x86_64|i.86|powerpc|arm|aarch64|mips).*-linux'

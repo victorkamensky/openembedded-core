@@ -1,0 +1,97 @@
+From 6a873f2bd03c76b18b7d6ad2187b00d6a3e2a8d0 Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Thu, 8 Feb 2018 20:09:19 -0800
+Subject: [PATCH 3/6] sysroot: debuginfo lookup with sysroot case do not remove
+ sysroot from file_name
+
+If sysroot option is passed, and debug symbols reside in sysroot along
+with executable <foo> in <foo_dir>/.debug/<foo_file> directory, stap
+fails to find debuginfo because it strips out sysroot path from file_name
+so dwfl_standard_find_debuginfo ends up looking at host
+<foo_dir>/.debug/<foo_file> rather then checking
+<sysroot>/<foo_dir>/.debug/<foo_file>.
+
+Note in cross compile environment, it is good idea to set and export
+proper SYSTEMTAP_DEBUGINFO_PATH variable because usual built defaults that
+work for native distros very often not applicable to cross sysroot
+based environment. For example for yocto poky/OE build the following
+setting seems proper "+:.debug:build".
+
+Here are steps how to reproduce the issue. Note <sysroot> is produced by
+yocto poky build.
+
+[kamensky@coreos-lnx2 tests]$ ls /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ ls /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -v -l 'process("/bin/mkdir.coreutils").function("*")'
+Pass 1: parsed user script and 480 library scripts using 230184virt/93416res/5344shr/88612data kb, in 350usr/30sys/378real ms.
+process("/bin/mkdir.coreutils").function("_fini")
+process("/bin/mkdir.coreutils").function("_init")
+process("/bin/mkdir.coreutils").function("fts_children")
+process("/bin/mkdir.coreutils").function("fts_close")
+process("/bin/mkdir.coreutils").function("fts_open")
+process("/bin/mkdir.coreutils").function("fts_read")
+process("/bin/mkdir.coreutils").function("fts_set")
+Pass 2: analyzed script: 7 probes, 0 functions, 0 embeds, 0 globals using 233484virt/97928res/6212shr/91912data kb, in 20usr/0sys/26real ms.
+
+running above example under strace shows that stap tries to access
+/bin/.debug/mkdir.coreutils on host, rather then sysroot
+
+13064 openat(AT_FDCWD, "/bin/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+13064 openat(AT_FDCWD, "/bin/.debug/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+13064 openat(AT_FDCWD, "/bin/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+13064 openat(AT_FDCWD, "/bin/build/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+13064 openat(AT_FDCWD, "/bin/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+
+After fix applied stap is able to find /bin/.debug/mkdir.coreutils under
+sysroot:
+
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -v -l 'process("/bin/mkdir.coreutils").function("*")' | wc
+Pass 1: parsed user script and 480 library scripts using 230184virt/93440res/5368shr/88612data kb, in 330usr/40sys/371real ms.
+Pass 2: analyzed script: 401 probes, 0 functions, 0 embeds, 0 globals using 235092virt/99484res/6256shr/93520data kb, in 30usr/0sys/35real ms.
+    249     249   29671
+
+Also verified on target that script like example below, once compiled
+against sysroot on host and copied back on target can trace 'mkdir'
+invocation functions:
+
+[kamensky@coreos-lnx2 tests]$ cat mkdir1.stp
+probe process("/bin/mkdir.coreutils").function("*").call {
+  printf ("%s -> %s\n", thread_indent(1), ppfunc())
+}
+probe process("/bin/mkdir.coreutils").function("*").return {
+  printf ("%s <- %s\n", thread_indent(-1), ppfunc())
+}
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ setupdwfl.cxx | 12 ------------
+ 1 file changed, 12 deletions(-)
+
+diff --git a/setupdwfl.cxx b/setupdwfl.cxx
+index f00cf75..e5bfa28 100644
+--- a/setupdwfl.cxx
++++ b/setupdwfl.cxx
+@@ -637,18 +637,6 @@ internal_find_debuginfo (Dwfl_Module *mod,
+ 
+   call_dwfl_standard_find_debuginfo:
+ 
+-  if (current_session_for_find_debuginfo)
+-    {
+-      string sysroot = current_session_for_find_debuginfo->sysroot + "/*";
+-      int    found   = fnmatch(sysroot.c_str(), file_name, 0);
+-
+-      if (found)
+-	{
+-	  file_name = file_name
+-	    + current_session_for_find_debuginfo->sysroot.length() - 1;
+-	}
+-    }
+-
+   /* Call the original dwfl_standard_find_debuginfo */
+   return dwfl_standard_find_debuginfo(mod, userdata, modname, base,
+               file_name, debuglink_file,
+-- 
+2.7.4
+

@@ -1,0 +1,159 @@
+From b9edb57fb3e8e1cb1b8a9d20350bfc7cb3b1a4a7 Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Thu, 8 Feb 2018 20:27:55 -0800
+Subject: [PATCH 5/6] sysroot: handle symbolic links with absolute name
+ relative to sysroot
+
+In case of symbolic link found under sysroot point to absolute path,
+instead of trying to look for such absolute path in host system,
+apply sysroot prefix first.
+
+Here are steps how to reproduce the issue. Note <sysroot> is produced by
+yocto poky build.
+
+kamensky@coreos-lnx2 tests]$ ls -l /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir
+lrwxrwxrwx. 1 kamensky kamensky 20 Jan 30 18:29 /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir -> /bin/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ ls -l /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+-rwxr-xr-x. 1 kamensky kamensky 88232 Jan 29 09:58 /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ ls -l /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+-rwxr-xr-x. 1 kamensky kamensky 383456 Jan 29 09:58 /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ cat mkdir4.stp
+probe process("/bin/mkdir").function("*").call {
+  printf ("%s -> %s\n", thread_indent(1), ppfunc())
+}
+probe process("/bin/mkdir").function("*").return {
+  printf ("%s <- %s\n", thread_indent(-1), ppfunc())
+}
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -v -p4 -m mkdir4 mkdir4.stp
+Pass 1: parsed user script and 480 library scripts using 230196virt/93484res/5396shr/88624data kb, in 340usr/30sys/370real ms.
+semantic error: resolution failed in DWARF builder
+
+semantic error: while resolving probe point: identifier 'process' at mkdir4.stp:1:7
+        source: probe process("/bin/mkdir").function("*").call {
+                      ^
+
+semantic error: no match
+
+semantic error: resolution failed in DWARF builder
+
+semantic error: while resolving probe point: identifier 'process' at :4:7
+        source: probe process("/bin/mkdir").function("*").return {
+                      ^
+
+semantic error: no match
+
+Pass 2: analyzed script: 0 probes, 0 functions, 0 embeds, 0 globals using 233496virt/96980res/5468shr/91924data kb, in 20usr/0sys/25real ms.
+Pass 2: analysis failed.  [man error::pass2]
+
+After the fix above sript works fine verified that it traces mkdir
+functions on target.
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ util.cxx | 76 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 76 insertions(+)
+
+diff --git a/util.cxx b/util.cxx
+index dd87b38..237cb0f 100644
+--- a/util.cxx
++++ b/util.cxx
+@@ -443,6 +443,64 @@ split_lines(const char *buf, size_t n)
+   return lines;
+ }
+ 
++static string
++follow_link(const string& name, const string& sysroot)
++{
++  char *linkname;
++  ssize_t r;
++  string retpath;
++  struct stat st;
++
++  const char *f = name.c_str();
++
++  lstat(f, &st);
++
++  linkname = (char *) malloc(st.st_size + 1);
++
++  if (linkname)
++    {
++      r = readlink(f, linkname, st.st_size + 1);
++      linkname[st.st_size] = '\0';
++      /*
++       * If we have non-empty sysroot and we got link that
++       * points to absolute path name, we need to look at
++       * this path relative to sysroot itself. access and
++       * stat will follow symbolic links correctly only in
++       * case with empty sysroot.
++       */
++      while (r != -1 && linkname && linkname[0] == '/')
++	{
++	  string fname1 = sysroot + linkname;
++	  const char *f1 = fname1.c_str();
++	  if (access(f1, X_OK) == 0
++	      && stat(f1, &st) == 0
++	      && S_ISREG(st.st_mode))
++	    {
++	      retpath = fname1;
++	      break;
++	    }
++	  else if (lstat(f1, &st) == 0
++		   && S_ISLNK(st.st_mode))
++	    {
++	      free(linkname);
++	      linkname = (char *) malloc(st.st_size + 1);
++	      if (linkname)
++		{
++		  r = readlink(f1, linkname, st.st_size + 1);
++		  linkname[st.st_size] = '\0';
++		}
++	    }
++	  else
++	    {
++	      break;
++	    }
++	}
++    }
++  free(linkname);
++
++  return retpath;
++}
++
+ // Resolve an executable name to a canonical full path name, with the
+ // same policy as execvp().  A program name not containing a slash
+ // will be searched along the $PATH.
+@@ -467,6 +525,14 @@ string find_executable(const string& name, const string& sysroot,
+   if (name.find('/') != string::npos) // slash in the path already?
+     {
+       retpath = sysroot + name;
++
++      const char *f = retpath.c_str();
++      if (sysroot != ""
++	  && lstat(f, &st) == 0
++	  && S_ISLNK(st.st_mode))
++	{
++	  retpath = follow_link(f, sysroot);
++	}
+     }
+   else // Nope, search $PATH.
+     {
+@@ -495,6 +561,16 @@ string find_executable(const string& name, const string& sysroot,
+                   retpath = fname;
+                   break;
+                 }
++              else if (sysroot != ""
++                       && lstat(f, &st) == 0
++                       && S_ISLNK(st.st_mode))
++		{
++		  retpath = follow_link(f, sysroot);
++		  if (retpath != "")
++		    {
++		      break;
++		    }
++		}
+             }
+         }
+     }
+-- 
+2.7.4
+

@@ -1,0 +1,58 @@
+From 8d6e3b078167e892501242b6cd47ee6726d31170 Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Tue, 20 Feb 2018 08:38:27 -0800
+Subject: [PATCH 6/6] sysroot: _stp_umodule_relocate needs receive target file
+ path
+
+Strip of sysroot from module name is required when
+_stp_umodule_relocate call is generated. Otherwise path won't
+match path on target and could will fail to calculated address
+within the file. Note in another place in tapsets.cxx where
+_stp_umodule_relocate is emitted path_remove_sysroot is already
+applied.
+
+Here are steps how to reproduce the issue. Note <sysroot> is produced by
+yocto poky build.
+
+[kamensky@coreos-lnx2 tests]$ cat od.stp
+probe process("/usr/bin/od.coreutils").function("main").call {
+  printf ("%s: flag_dump_strings=0x%x\n", ppfunc(), $flag_dump_strings)
+}
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -p4 -k -m od od.stp
+od.ko
+Keeping temporary directory "/tmp/stapdnaaGF"
+[kamensky@coreos-lnx2 tests]$ grep _stp_umodule_relocate /tmp/stapdnaaGF/od_src.c
+  l->__retvalue = uderef(1, ((((int64_t) (/* pragma:vma */ ({ unsigned long addr = 0; addr = _stp_umodule_relocate ("/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/usr/bin/od.coreutils", 0x212212, current); addr; }))))));
+
+Note above _stp_umodule_relocate call was emitted with file path
+on the host, it will fail once executed on target.
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ loc2stap.cxx | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/loc2stap.cxx b/loc2stap.cxx
+index 4818ee0..e2339a4 100644
+--- a/loc2stap.cxx
++++ b/loc2stap.cxx
+@@ -17,6 +17,7 @@
+ 
+ #include "loc2stap.h"
+ #include "dwflpp.h"
++#include "tapsets.h"
+ 
+ #if ! _ELFUTILS_PREREQ(0, 153)
+ #define DW_OP_GNU_entry_value 0xf3
+@@ -106,7 +107,7 @@ location_context::translate_address(Dwarf_Addr addr)
+           c = "/* pragma:vma */ "
+               "({ unsigned long addr = 0; "
+               "addr = _stp_umodule_relocate (\""
+-              + resolve_path(dw->module_name.c_str()) + "\", "
++              + path_remove_sysroot(dw->sess, resolve_path(dw->module_name.c_str())) + "\", "
+               + lex_cast_hex (addr)
+ 	      + ", current); addr; })";
+ 	}
+-- 
+2.7.4
+

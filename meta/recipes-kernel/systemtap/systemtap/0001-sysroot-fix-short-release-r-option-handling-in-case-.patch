@@ -1,0 +1,61 @@
+From 8fccac2483354a8a3e2419c36c867c81045dbe7f Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Thu, 8 Feb 2018 20:00:46 -0800
+Subject: [PATCH 1/6] sysroot: fix short release -r option handling in case of
+ sysroot read System.map symbols
+
+Add sysroot to system_map_path + "/boot/System.map" case. Otherwise
+stap tries to look symbols on host system and it produce error like this:
+
+> Kernel symbol table /boot/System.map-4.9.78-yocto-standard unavailable, (No such file or directory)
+
+Here are steps to reproduce the issue. Note <sysroot> is produced by yocto
+poky build. Under <sysroot>/lib/modules/4.9.78-yocto-standard/build there
+is no System.map file; instead it is installed under <sysroot>/boot directory.
+
+[kamensky@coreos-lnx2 tests]$ cat meminfo.stp
+probe kernel.function("meminfo_proc_show") {
+        println("meminfo_proc_show called")
+}
+[kamensky@coreos-lnx2 tests]$ export SYSTEMTAP_DEBUGINFO_PATH=+:.debug:build
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -p4 -v -v -m meminfo meminfo.stp
+Systemtap translator/driver (version 3.3/0.170, commit release-3.2-92-g26c5e3c03c94 + changes)
+Copyright (C) 2005-2017 Red Hat, Inc. and others
+This is free software; see the source for copying conditions.
+tested kernel versions: 2.6.18 ... 4.14-rc4
+enabled features: BPF PYTHON2 PYTHON3 LIBXML2 NLS
+Created temporary directory "/tmp/staprq4IGE"
+Session arch: x86_64 release: 4.9.78-yocto-standard
+Kernel symbol table /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs//lib/modules/4.9.78-yocto-standard/build/System.map unavailable, (No such file or directory)
+Kernel symbol table /boot/System.map-4.9.78-yocto-standard unavailable, (No such file or directory)
+WARNING: Kernel function symbol table missing [man warning::symbols]
+<snip>
+semantic error: while resolving probe point: identifier 'kernel' at meminfo.stp:1:7
+   thrown from: ../systemtap/elaborate.cxx:1080
+        source: probe kernel.function("meminfo_proc_show") {
+                      ^
+
+semantic error: missing x86_64 kernel/module debuginfo [man warning::debuginfo] under '/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs//lib/modules/4.9.78-yocto-standard/build'
+   thrown from: ../systemtap/dwflpp.cxx:340
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ session.cxx | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/session.cxx b/session.cxx
+index c7eaf6f..37caf3f 100644
+--- a/session.cxx
++++ b/session.cxx
+@@ -2038,7 +2038,7 @@ systemtap_session::parse_kernel_functions ()
+ 	clog << _F("Kernel symbol table %s unavailable, (%s)",
+ 		   system_map_path.c_str(), strerror(errno)) << endl;
+ 
+-      system_map_path = "/boot/System.map-" + kernel_release;
++      system_map_path = sysroot + "/boot/System.map-" + kernel_release;
+       system_map.clear();
+       system_map.open(system_map_path.c_str(), ifstream::in);
+       if (! system_map.is_open())
+-- 
+2.7.4
+

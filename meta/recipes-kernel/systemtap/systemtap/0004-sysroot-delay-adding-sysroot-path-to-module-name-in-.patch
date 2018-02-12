@@ -1,0 +1,124 @@
+From 03b84b2ca963ec4c4c0a2949063f3f2d0c19a4e9 Mon Sep 17 00:00:00 2001
+From: Victor Kamensky <kamensky@cisco.com>
+Date: Thu, 8 Feb 2018 20:05:39 -0800
+Subject: [PATCH 4/6] sysroot: delay adding sysroot path to module name in case
+ of non absolute executable
+
+Current stap code adds sysroot prematurely for probes that specify
+non absolute path name, i.e like "foo", so when find_executable called
+it receives full path as <sysroot>/foo and find_executable does not
+search PATH while applying sysroot.
+
+Fix delays adding sysroot till path inside of sysroot is searched first.
+
+Also fix missing sysroot addition in glob expansion case.
+
+Note in case of sysroot cross compile environment it is highly recommended
+to pass --sysenv=PATH=xxx:yyy and --sysenv=LD_LIBRARY_PATH=zzz to use
+search path appropriate for target system, rather then host setting on
+system where stap runs.
+
+Here are steps how to reproduce the issue. Note <sysroot> is produced by
+yocto poky build.
+
+[kamensky@coreos-lnx2 tests]$ cat mkdir2.stp
+probe process("mkdir.coreutils").function("*").call {
+  printf ("%s -> %s\n", thread_indent(1), ppfunc())
+}
+probe process("mkdir.coreutils").function("*").return {
+  printf ("%s <- %s\n", thread_indent(-1), ppfunc())
+}
+[kamensky@coreos-lnx2 tests]$ ls /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ ls /home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/bin/.debug/mkdir.coreutils
+[kamensky@coreos-lnx2 tests]$ /home/wd8/systemtap/20180208_2/packages/bin/stap --sysroot=/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs -a x86_64 -r 4.9.78-yocto-standard -B CROSS_COMPILE=x86_64-poky-linux- --sysenv=PATH=/usr/bin:/bin:/usr/sbin:/sbin --sysenv=LD_LIBRARY_PATH=/lib:/usr/lib -v -p4 -m mkdir2 mkdir2.stp
+Pass 1: parsed user script and 480 library scripts using 230196virt/93536res/5448shr/88624data kb, in 330usr/30sys/364real ms.
+semantic error: resolution failed in DWARF builder
+
+semantic error: while resolving probe point: identifier 'process' at mkdir2.stp:1:7
+        source: probe process("mkdir.coreutils").function("*").call {
+                      ^
+
+semantic error: no match
+
+semantic error: resolution failed in DWARF builder
+
+semantic error: while resolving probe point: identifier 'process' at :4:7
+        source: probe process("mkdir.coreutils").function("*").return {
+                      ^
+
+semantic error: no match
+
+Pass 2: analyzed script: 0 probes, 0 functions, 0 embeds, 0 globals using 233496virt/97032res/5520shr/91924data kb, in 20usr/0sys/25real ms.
+Pass 2: analysis failed.  [man error::pass2]
+
+Under strace it shows that stap is not trying to lookup mkdir.coreutils
+inside of sysroot accoring to PATH that was passed through --sysenv:
+
+16048 openat(AT_FDCWD, "/home/wd8/yocto/20180128/build_x86_64/tmp/work/intel_corei7_64-poky-linux/kdevel-console-devel-image/1.0-r0/rootfs/mkdir.coreutils", O_RDONLY) = -1 ENOENT (No such file or directory)
+
+i.e it rather just tries <sysroot> + "mkdir.coreutils"
+
+After the fix veried that that above example able to find mkdir.coreutils
+executable in sysroot and corresponding symbols
+
+Also verified that glob matching in sysroot works too for example for
+this test case:
+
+[kamensky@coreos-lnx2 tests]$ cat mkdir3.stp
+probe process("/bin/mkdi*").function("*").call {
+  printf ("%s -> %s\n", thread_indent(1), ppfunc())
+}
+probe process("/bin/mkdi*").function("*").return {
+  printf ("%s <- %s\n", thread_indent(-1), ppfunc())
+}
+
+Signed-off-by: Victor Kamensky <kamensky@cisco.com>
+---
+ tapsets.cxx | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/tapsets.cxx b/tapsets.cxx
+index 28296b1..c664df0 100644
+--- a/tapsets.cxx
++++ b/tapsets.cxx
+@@ -746,7 +746,7 @@ base_query::base_query(dwflpp & dw, literal_map_t const & params):
+               pid_val = 0;
+               get_string_param(params, TOK_PROCESS, module_val);
+             }
+-          module_val = find_executable (module_val, "", sess.sysenv);
++          module_val = find_executable (module_val, sess.sysroot, sess.sysenv);
+           if (!is_fully_resolved(module_val, "", sess.sysenv))
+             throw SEMANTIC_ERROR(_F("cannot find executable '%s'",
+                                     module_val.to_string().c_str()));
+@@ -8293,7 +8293,6 @@ dwarf_builder::build(systemtap_session & sess,
+             }
+           else
+             {
+-              module_name = (string)sess.sysroot + (string)module_name;
+               filled_parameters[TOK_PROCESS] = new literal_string(module_name);
+             }
+         }
+@@ -8327,7 +8326,7 @@ dwarf_builder::build(systemtap_session & sess,
+           assert (lit);
+ 
+           // Evaluate glob here, and call derive_probes recursively with each match.
+-          const auto& globs = glob_executable (module_name);
++          const auto& globs = glob_executable (sess.sysroot + string(module_name));
+           unsigned results_pre = finished_results.size();
+           for (auto it = globs.begin(); it != globs.end(); ++it)
+             {
+@@ -8418,7 +8417,8 @@ dwarf_builder::build(systemtap_session & sess,
+ 
+       // PR13338: unquote glob results
+       module_name = unescape_glob_chars (module_name);
+-      user_path = find_executable (module_name, "", sess.sysenv); // canonicalize it
++      user_path = find_executable (module_name, sess.sysroot,
++				   sess.sysenv); // canonicalize it
+       if (!is_fully_resolved(user_path, "", sess.sysenv))
+         throw SEMANTIC_ERROR(_F("cannot find executable '%s'",
+                                 user_path.to_string().c_str()));
+-- 
+2.7.4
+
