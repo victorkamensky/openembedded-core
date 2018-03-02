@@ -28,6 +28,12 @@ IMAGE_FEATURES[validitems] += "debug-tweaks read-only-rootfs empty-root-password
 # Generate companion debugfs?
 IMAGE_GEN_DEBUGFS ?= "0"
 
+# Generate companion combined debugfs? The difference from IMAGE_GEN_DEBUGFS
+# is that in case of IMAGE_GEN_COMBINED_DEBUGFS resulting debufs contains full
+# copy of original symbols plus -dbg packages, whereas in case of IMAGE_GEN_DEBUGFS
+# it contains only -dbg packages
+IMAGE_GEN_COMBINED_DEBUGFS ?= "0"
+
 # rootfs bootstrap install
 ROOTFS_BOOTSTRAP_INSTALL = "run-postinsts"
 
@@ -117,7 +123,7 @@ def rootfs_variables(d):
                  'IMAGE_ROOTFS_MAXSIZE','IMAGE_NAME','IMAGE_LINK_NAME','IMAGE_MANIFEST','DEPLOY_DIR_IMAGE','IMAGE_FSTYPES','IMAGE_INSTALL_COMPLEMENTARY','IMAGE_LINGUAS',
                  'MULTILIBRE_ALLOW_REP','MULTILIB_TEMP_ROOTFS','MULTILIB_VARIANTS','MULTILIBS','ALL_MULTILIB_PACKAGE_ARCHS','MULTILIB_GLOBAL_VARIANTS','BAD_RECOMMENDATIONS','NO_RECOMMENDATIONS',
                  'PACKAGE_ARCHS','PACKAGE_CLASSES','TARGET_VENDOR','TARGET_ARCH','TARGET_OS','OVERRIDES','BBEXTENDVARIANT','FEED_DEPLOYDIR_BASE_URI','INTERCEPT_DIR','USE_DEVFS',
-                 'CONVERSIONTYPES', 'IMAGE_GEN_DEBUGFS', 'ROOTFS_RO_UNNEEDED', 'IMGDEPLOYDIR', 'PACKAGE_EXCLUDE_COMPLEMENTARY', 'REPRODUCIBLE_TIMESTAMP_ROOTFS']
+                 'CONVERSIONTYPES', 'IMAGE_GEN_DEBUGFS', 'IMAGE_GEN_COMBINED_DEBUGFS', 'ROOTFS_RO_UNNEEDED', 'IMGDEPLOYDIR', 'PACKAGE_EXCLUDE_COMPLEMENTARY', 'REPRODUCIBLE_TIMESTAMP_ROOTFS']
     variables.extend(rootfs_command_variables(d))
     variables.extend(variable_depends(d))
     return " ".join(variables)
@@ -268,6 +274,7 @@ fakeroot python do_image () {
     from oe.utils import execute_pre_post_process
 
     d.setVarFlag('REPRODUCIBLE_TIMESTAMP_ROOTFS', 'export', '1')
+    d.setVarFlag('IMAGE_GEN_COMBINED_DEBUGFS', 'export', '1')
     pre_process_cmds = d.getVar("IMAGE_PREPROCESS_COMMAND")
 
     execute_pre_post_process(d, pre_process_cmds)
@@ -381,7 +388,7 @@ python () {
     alltypes = d.getVar('IMAGE_FSTYPES').split()
     typedeps = {}
 
-    if d.getVar('IMAGE_GEN_DEBUGFS') == "1":
+    if d.getVar('IMAGE_GEN_DEBUGFS') == "1" or d.getVar('IMAGE_GEN_COMBINED_DEBUGFS') == "1" :
         debugfs_fstypes = d.getVar('IMAGE_FSTYPES_DEBUGFS').split()
         for t in debugfs_fstypes:
             alltypes.append("debugfs_" + t)

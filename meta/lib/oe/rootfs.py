@@ -107,7 +107,9 @@ class Rootfs(object, metaclass=ABCMeta):
 
     def _setup_dbg_rootfs(self, dirs):
         gen_debugfs = self.d.getVar('IMAGE_GEN_DEBUGFS') or '0'
-        if gen_debugfs != '1':
+        gen_combined_debugfs = self.d.getVar('IMAGE_GEN_COMBINED_DEBUGFS') or '0'
+
+        if gen_debugfs != '1' and gen_combined_debugfs != '1':
            return
 
         bb.note("  Renaming the original rootfs...")
@@ -118,32 +120,37 @@ class Rootfs(object, metaclass=ABCMeta):
         os.rename(self.image_rootfs, self.image_rootfs + '-orig')
 
         bb.note("  Creating debug rootfs...")
-        bb.utils.mkdirhier(self.image_rootfs)
 
-        bb.note("  Copying back package database...")
-        for dir in dirs:
-            if not os.path.isdir(self.image_rootfs + '-orig' + dir):
-                continue
-            bb.utils.mkdirhier(self.image_rootfs + os.path.dirname(dir))
-            shutil.copytree(self.image_rootfs + '-orig' + dir, self.image_rootfs + dir, symlinks=True)
+        if gen_combined_debugfs != '1':
+            bb.utils.mkdirhier(self.image_rootfs)
 
-        cpath = oe.cachedpath.CachedPath()
-        # Copy files located in /usr/lib/debug or /usr/src/debug
-        for dir in ["/usr/lib/debug", "/usr/src/debug"]:
-            src = self.image_rootfs + '-orig' + dir
-            if cpath.exists(src):
-                dst = self.image_rootfs + dir
-                bb.utils.mkdirhier(os.path.dirname(dst))
-                shutil.copytree(src, dst)
+            bb.note("  Copying back package database...")
+            for dir in dirs:
+                if not os.path.isdir(self.image_rootfs + '-orig' + dir):
+                    continue
+                bb.utils.mkdirhier(self.image_rootfs + os.path.dirname(dir))
+                shutil.copytree(self.image_rootfs + '-orig' + dir, self.image_rootfs + dir, symlinks=True)
 
-        # Copy files with suffix '.debug' or located in '.debug' dir.
-        for root, dirs, files in cpath.walk(self.image_rootfs + '-orig'):
-            relative_dir = root[len(self.image_rootfs + '-orig'):]
-            for f in files:
-                if f.endswith('.debug') or '/.debug' in relative_dir:
-                    bb.utils.mkdirhier(self.image_rootfs + relative_dir)
-                    shutil.copy(os.path.join(root, f),
-                                self.image_rootfs + relative_dir)
+            cpath = oe.cachedpath.CachedPath()
+            # Copy files located in /usr/lib/debug or /usr/src/debug
+            for dir in ["/usr/lib/debug", "/usr/src/debug"]:
+                src = self.image_rootfs + '-orig' + dir
+                if cpath.exists(src):
+                    dst = self.image_rootfs + dir
+                    bb.utils.mkdirhier(os.path.dirname(dst))
+                    shutil.copytree(src, dst)
+
+            # Copy files with suffix '.debug' or located in '.debug' dir.
+            for root, dirs, files in cpath.walk(self.image_rootfs + '-orig'):
+                relative_dir = root[len(self.image_rootfs + '-orig'):]
+                for f in files:
+                    if f.endswith('.debug') or '/.debug' in relative_dir:
+                        bb.utils.mkdirhier(self.image_rootfs + relative_dir)
+                        shutil.copy(os.path.join(root, f),
+                                    self.image_rootfs + relative_dir)
+        else:
+            bb.note("  Copying back original image...")
+            shutil.copytree(self.image_rootfs + '-orig', self.image_rootfs, symlinks=True)
 
         bb.note("  Install complementary '*-dbg' packages...")
         self.pm.install_complementary('*-dbg')

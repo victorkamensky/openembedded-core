@@ -35,6 +35,11 @@ prelink_image () {
 
 	dynamic_loader=$(linuxloader)
 
+        if [ "$IMAGE_GEN_COMBINED_DEBUGFS" = "1" ]; then
+                cp ${IMAGE_ROOTFS}${sysconfdir}/prelink.conf ${IMAGE_ROOTFS}-dbg${sysconfdir}/prelink.conf
+                cp ${IMAGE_ROOTFS}${sysconfdir}/ld.so.conf ${IMAGE_ROOTFS}-dbg${sysconfdir}/ld.so.conf
+        fi
+
 	# prelink!
 	if [ "$BUILD_REPRODUCIBLE_BINARIES" = "1" ]; then
 		bbnote " prelink: BUILD_REPRODUCIBLE_BINARIES..."
@@ -44,8 +49,16 @@ prelink_image () {
 			export PRELINK_TIMESTAMP=$REPRODUCIBLE_TIMESTAMP_ROOTFS
 		fi
 		${STAGING_SBINDIR_NATIVE}/prelink --root ${IMAGE_ROOTFS} -am -N -c ${sysconfdir}/prelink.conf --dynamic-linker $dynamic_loader
+                if [ "$IMAGE_GEN_COMBINED_DEBUGFS" = "1" ]; then
+                         bbnote " prelink: IMAGE_GEN_COMBINED_DEBUGFS..."
+		         ${STAGING_SBINDIR_NATIVE}/prelink --root ${IMAGE_ROOTFS}-dbg -am -N -c ${sysconfdir}/prelink.conf --dynamic-linker $dynamic_loader
+                fi
 	else
 		${STAGING_SBINDIR_NATIVE}/prelink --root ${IMAGE_ROOTFS} -amR -N -c ${sysconfdir}/prelink.conf --dynamic-linker $dynamic_loader
+                if [ "$IMAGE_GEN_COMBINED_DEBUGFS" = "1" ]; then
+                         bbnote " prelink: IMAGE_GEN_COMBINED_DEBUGFS..."
+		         ${STAGING_SBINDIR_NATIVE}/prelink --root ${IMAGE_ROOTFS}-dbg -amR -N -c ${sysconfdir}/prelink.conf --dynamic-linker $dynamic_loader
+                fi
 	fi
 
 	# Remove the prelink.conf if we had to add it.
