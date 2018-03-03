@@ -4,7 +4,6 @@ SRCREV = "45d0e7a09a15a21078d0ebf2db5175ed9e87014e"
 PV = "3.1"
 
 SRC_URI = "git://sourceware.org/git/systemtap.git \
-           file://system_map_location.patch \
            file://configure-allow-to-disable-libvirt.patch \
            file://x32_abi_time.patch \
            file://monitor-option.patch \
