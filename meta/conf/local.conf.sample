@@ -208,6 +208,23 @@ PACKAGECONFIG_append_pn-qemu-native = " sdl"
 PACKAGECONFIG_append_pn-nativesdk-qemu = " sdl"
 #ASSUME_PROVIDED += "libsdl-native"
 
+# enable separate rootfs-dbg sysroot and make sure it contains both target binaries
+# and symbols files
+IMAGE_GEN_DEBUGFS = "1"
+IMAGE_FSTYPES_DEBUGFS = "tar.bz2"
+USER_CLASSES += "image-combined-dbg"
+
+# enable debug symbols in kernel, by default
+KERNEL_EXTRA_FEATURES_append = " features/debug/debug-kernel.scc"
+
+# make sure that we don't have systemtap translator on target, just
+# small set of run-time utilities needed to activate systemtap
+# modules, compiled on host
+PACKAGECONFIG_pn-systemtap = "monitor"
+
+# add systemtap to image and for testing small ssh server
+IMAGE_INSTALL_append = " systemtap dropbear"
+
 # CONF_VERSION is increased each time build/conf/ changes incompatibly and is used to
 # track the version of this file when it was generated. This can safely be ignored if
 # this doesn't mean anything to you.
