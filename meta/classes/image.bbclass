@@ -268,6 +268,7 @@ fakeroot python do_image () {
     from oe.utils import execute_pre_post_process
 
     d.setVarFlag('REPRODUCIBLE_TIMESTAMP_ROOTFS', 'export', '1')
+    d.setVarFlag('IMAGE_GEN_DEBUGFS', 'export', '1')
     pre_process_cmds = d.getVar("IMAGE_PREPROCESS_COMMAND")
 
     execute_pre_post_process(d, pre_process_cmds)
